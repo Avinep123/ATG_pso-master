@@ -1,0 +1,34 @@
+{% extends 'base.html' %}
+{% block content %}
+{% load static %}
+{% load index %}
+
+<div>
+  {% for section in sections %}
+  <h2 class="secHead">{{ section.section_id }} ({{ section.department }})</h2>
+  <table class="timetable">
+    <thead>
+      <tr>
+        <th>Class #</th>
+        {% for time in timeSlots %}
+        <th>{{ time.0 }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+
+    <tbody>
+      {% for week in weekDays %}
+      <tr>
+        <th>{{ week.0 }}</th>
+        {% for time in timeSlots %}
+        {% sub schedule section.department.dept_name week.0 time.0 break_times teacher_colors as result %}
+        <td>{{ result|safe }}</td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endfor %}
+</div>
+
+{% endblock %}
