@@ -16,7 +16,7 @@ from django.conf import settings
 import math
 
 # PSO Hyperparameters
-SWARM_SIZE = 15
+SWARM_SIZE = 20
 MAX_ITERATIONS = 200
 INERTIA_WEIGHT = 0.7
 COGNITIVE_WEIGHT = 1.5
