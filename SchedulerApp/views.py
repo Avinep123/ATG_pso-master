@@ -18,7 +18,8 @@ import math
 # PSO Hyperparameters
 SWARM_SIZE = 20
 MAX_ITERATIONS = 200
-INERTIA_WEIGHT = 0.7
+INITIAL_INERTIA = 0.9
+FINAL_INERTIA = 0.4
 COGNITIVE_WEIGHT = 1.5
 SOCIAL_WEIGHT = 1.5
 MAX_VELOCITY = 1.0
@@ -59,9 +60,9 @@ def repair(schedule):
 
         if start_time < instructor.availability_start or end_time > instructor.availability_end:
             # Find a new meeting time within the instructor's availability
-            available_times = [mt for mt in data.get_meetingTimes() 
-                              if mt.time.split(' - ')[0] >= str(instructor.availability_start) 
-                              and mt.time.split(' - ')[1] <= str(instructor.availability_end)]
+            available_times = [ mt for mt in data.get_meetingTimes()
+                                if datetime.strptime(mt.time.split(' - ')[0].strip(), '%H:%M').time() >= instructor.availability_start
+                                and datetime.strptime(mt.time.split(' - ')[1].strip(), '%H:%M').time() <= instructor.availability_end]
             if available_times:
                 cls.set_meetingTime(random.choice(available_times))
 
@@ -168,21 +169,17 @@ class Schedule:
         newClass.set_room(rooms[random.randrange(0, len(rooms))])
 
         crs_inst = course.instructors.all()
-        newClass.set_instructor(
-            crs_inst[random.randrange(0, len(crs_inst))])
+        if not crs_inst:
+            raise ValueError(f"No instructors available for {course}.")
+        inst_index = len(self._classes) % len(crs_inst)
+        newClass.set_instructor(crs_inst[inst_index])
 
         self._classes.append(newClass)
-    def getGenes(self):
-        """Returns a list of dictionaries representing the genes (classes) in the schedule."""
+
+    def get_schedule_summary(self):
+        """Returns compact representation of schedule decisions"""
         return [
-            {
-                "department": cls.get_dept(),
-                "course": cls.get_course(),
-                "instructor": cls.get_instructor(),
-                "meeting_time": cls.get_meetingTime(),
-                "room": cls.get_room(),
-                "section": cls.section,
-            }
+            (cls.meeting_time.pid, cls.instructor.uid, cls.room.r_number)
             for cls in self._classes
         ]
 
@@ -218,7 +215,6 @@ class Schedule:
 
     def calculateFitness(self):
         self._hard_constraint_violations = {
-            'free_slots': 0,
             'same_course_same_section': 0,
             'instructor_conflict': 0,
             'duplicate_time_section': 0,
@@ -234,7 +230,6 @@ class Schedule:
         }
 
         hard_weights = {
-            'free_slots': 10,
             'same_course_same_section': 3,
             'instructor_conflict': 3,
             'duplicate_time_section': 3,
@@ -245,9 +240,9 @@ class Schedule:
 
         soft_weights = {
             'no_consecutive_classes': 0.5,
-            'noon_classes': 3,
+            'noon_classes': 0.5,
             'break_time_conflict': 0.3,
-            'balanced_days': 0.3,
+            'balanced_days': 0.5,
         }
 
     # Check constraints
@@ -265,16 +260,12 @@ class Schedule:
             self.check_break_time_conflict(classes, i, soft_weights)
         self.check_balanced_days(classes, soft_weights)
 
-        total_slots = len(data.get_meetingTimes()) * len(data.get_rooms())
-        assigned_slots = len(classes)
-        free_slots = total_slots - assigned_slots
-        self._hard_constraint_violations['free_slots'] = free_slots
 
         hard_penalty = sum(hard_weights[key] * self._hard_constraint_violations[key] for key in hard_weights)
         soft_penalty = sum(soft_weights[key] * self._soft_constraint_violations[key] for key in soft_weights)
         hard_penalty /= max(1, len(hard_weights))
         soft_penalty /= max(1, len(soft_weights))
-        total_penalty = soft_penalty + (hard_penalty * 2)
+        total_penalty = soft_penalty + hard_penalty
         fitness = (1+10)/(total_penalty+1)
         self._fitness = fitness
         return self._fitness
@@ -293,7 +284,7 @@ class Schedule:
         for course, count in course_count.items():
             required_count = course.max_period  # assuming each course has this attribute
             if count != required_count:
-                print(f"Violation: {course} should appear {required_count} times but appears {count} times.")
+                #print(f"Violation: {course} should appear {required_count} times but appears {count} times.")
                 self._hard_constraint_violations['course_frequency'] += 1
     
     
@@ -373,7 +364,7 @@ class Schedule:
                     self._soft_constraint_violations['no_consecutive_classes'] += 1
 
     def check_noon_classes(self, classes, i, weights):
-        noon_start = self.parse_time('10:00')
+        noon_start = self.parse_time('12:00')
         noon_end = self.parse_time('15:00')
         start_time_str, _ = classes[i].meeting_time.time.split(' - ')
         start_time = self.parse_time(start_time_str)
@@ -401,7 +392,7 @@ class Schedule:
             day_class_count[day] += 1
         max_day = max(day_class_count.values())
         min_day = min(day_class_count.values())
-        if max_day - min_day > 2:
+        if max_day - min_day > 2 :
             self._soft_constraint_violations['balanced_days'] += 1
 
 
@@ -567,6 +558,7 @@ def timetable(request):
             for d in range(len(p.velocity)):
                 r1 = random.random()
                 r2 = random.random()
+                INERTIA_WEIGHT = INITIAL_INERTIA - ( (INITIAL_INERTIA - FINAL_INERTIA) * (VARS['generationNum'] / MAX_ITERATIONS) )
                 inertia = INERTIA_WEIGHT * p.velocity[d]
                 cognitive = COGNITIVE_WEIGHT * r1 * (p.pbest_position[d] - p.position[d])
                 social = SOCIAL_WEIGHT * r2 * (swarm.gbest_position[d] - p.position[d])
