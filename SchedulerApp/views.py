@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import os
 from django.conf import settings
 import math
+import copy
 
 # PSO Hyperparameters
 SWARM_SIZE = 20
@@ -22,7 +23,7 @@ INITIAL_INERTIA = 0.9
 FINAL_INERTIA = 0.4
 COGNITIVE_WEIGHT = 1.5
 SOCIAL_WEIGHT = 1.5
-MAX_VELOCITY = 1.0
+MAX_VELOCITY = 5.0
 MIN_PENALTY = 0.1  # Terminate if penalty is below this threshold
 
 VARS = {'generationNum': 0, 'terminateGens': False}
@@ -157,7 +158,7 @@ class Schedule:
         return self._fitness
 
     def addCourse(self, data, course, courses, dept, section):
-        newClass = Class(dept, section.section_id, course)
+        newClass = Class(dept, section, course)
 
         newClass.set_meetingTime(
             data.get_meetingTimes()[random.randrange(0, len(data.get_meetingTimes()))])
@@ -176,6 +177,7 @@ class Schedule:
 
         self._classes.append(newClass)
 
+
     def get_schedule_summary(self):
         """Returns compact representation of schedule decisions"""
         return [
@@ -188,6 +190,16 @@ class Schedule:
         for section in sections:
             dept = section.department
             n = section.num_class_in_week
+            # Ensure we don't exceed available meeting times
+            available_meeting_times = len(data.get_meetingTimes())
+            # print(f"Available meeting times: {available_meeting_times}")
+
+            if n > available_meeting_times:
+                print(f"Reducing n from {n} to available meeting times {available_meeting_times}.")
+                n = available_meeting_times  # Ensure we don't exceed available meeting times
+
+     
+
             courses = dept.courses.all()
 
         # Ensure courses exist
@@ -235,14 +247,14 @@ class Schedule:
             'duplicate_time_section': 3,
             'instructor_availability': 3,
             'total_classes_mismatch': 3,
-            'course_frequency': 5, 
+            'course_frequency': 3, 
         }
 
         soft_weights = {
             'no_consecutive_classes': 0.5,
             'noon_classes': 0.5,
             'break_time_conflict': 0.3,
-            'balanced_days': 0.5,
+            'balanced_days': 0.3,
         }
 
     # Check constraints
@@ -266,7 +278,8 @@ class Schedule:
         hard_penalty /= max(1, len(hard_weights))
         soft_penalty /= max(1, len(soft_weights))
         total_penalty = soft_penalty + hard_penalty
-        fitness = (1+10)/(total_penalty+1)
+        alpha = 0.05
+        fitness = math.exp(-alpha * total_penalty)
         self._fitness = fitness
         return self._fitness
     
@@ -463,7 +476,7 @@ def context_manager(schedule):
     context = []
     for i in range(len(classes)):
         clas = {}
-        clas['section'] = classes[i].section_id
+        clas['section'] = classes[i].section.section_id
         clas['dept'] = classes[i].department.dept_name
         clas['course'] = f'{classes[i].course.course_name} ({classes[i].course.course_number} {classes[i].course.max_numb_students})'
         clas['room'] = f'{classes[i].room.r_number} ({classes[i].room.seating_capacity})'
@@ -503,6 +516,7 @@ def get_random_color():
 
 
 @login_required
+@login_required
 def timetable(request):
     global data
     data = Data()
@@ -527,8 +541,10 @@ def timetable(request):
 
     # Initialize global best
     best_fitness = -1
-    for p in swarm.particles:
-        schedule = Schedule().initialize()
+    for i, p in enumerate(swarm.particles):
+        schedule = Schedule()
+        schedule._classes = copy.deepcopy(initial_schedule.getClasses())
+        print(f"Initializing Particle {i} schedule ID: {id(schedule)}")  # Debug log
         p.update_schedule(schedule)
         repair(schedule)
         fitness = schedule.getFitness()
@@ -542,9 +558,10 @@ def timetable(request):
     diversity = []
 
     while swarm.gbest_fitness < 1.0 and VARS['generationNum'] < MAX_ITERATIONS and not VARS['terminateGens']:
-        for p in swarm.particles:
+        for i, p in enumerate(swarm.particles):  # Ensure the loop variable is correctly defined
             schedule = Schedule()
-            schedule._classes = [cls for cls in initial_schedule.getClasses()]
+            schedule._classes = copy.deepcopy(initial_schedule.getClasses())
+            print(f"Updating Particle {i} schedule ID: {id(schedule)}")  # Debug log
             p.update_schedule(schedule)
             repair(schedule)
             fitness = schedule.getFitness()
@@ -558,7 +575,7 @@ def timetable(request):
             for d in range(len(p.velocity)):
                 r1 = random.random()
                 r2 = random.random()
-                INERTIA_WEIGHT = INITIAL_INERTIA - ( (INITIAL_INERTIA - FINAL_INERTIA) * (VARS['generationNum'] / MAX_ITERATIONS) )
+                INERTIA_WEIGHT = INITIAL_INERTIA - ((INITIAL_INERTIA - FINAL_INERTIA) * (VARS['generationNum'] / MAX_ITERATIONS))
                 inertia = INERTIA_WEIGHT * p.velocity[d]
                 cognitive = COGNITIVE_WEIGHT * r1 * (p.pbest_position[d] - p.position[d])
                 social = SOCIAL_WEIGHT * r2 * (swarm.gbest_position[d] - p.position[d])
@@ -576,7 +593,7 @@ def timetable(request):
     # Generate plots and render timetable template
     generate_combined_plots(fitness_values, average_fitness, diversity, SWARM_SIZE, INERTIA_WEIGHT)
     best_schedule = Schedule()
-    best_schedule._classes = [cls for cls in initial_schedule.getClasses()]
+    best_schedule._classes = copy.deepcopy(initial_schedule.getClasses())
     best_particle = Particle(classes_data)
     best_particle.position = swarm.gbest_position
     best_particle.update_schedule(best_schedule)

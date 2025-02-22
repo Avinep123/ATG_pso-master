@@ -9,7 +9,7 @@ TIME_SLOTS = (
     ('8:20 - 10:00'  , '8:20 - 10:00'),
     ('10:00 - 10:50', '10:00 - 10:50'),
     ('10:50 - 12:30', '10:50 - 12:30'),
-    ('12:30 - 14:10'  , '12:30 - 14:10'),
+    ('12:30 - 2:10'  , '12:30 - 2:10'),
 )
 
 
@@ -63,7 +63,7 @@ class InstructorAvailability(models.Model):
 class Course(models.Model):
     course_number = models.CharField(max_length=5, primary_key=True)
     course_name = models.CharField(max_length=40)
-    max_numb_students = models.IntegerField(default=50)
+    max_numb_students = models.IntegerField(default=48)
     max_period = models.IntegerField(default=2)
     instructors = models.ManyToManyField(Instructor)
 
