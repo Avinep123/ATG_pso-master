@@ -23,7 +23,7 @@ INITIAL_INERTIA = 0.9
 FINAL_INERTIA = 0.4
 COGNITIVE_WEIGHT = 1.5
 SOCIAL_WEIGHT = 1.5
-MAX_VELOCITY = 5.0
+MAX_VELOCITY = 1.0
 MIN_PENALTY = 0.1  # Terminate if penalty is below this threshold
 
 VARS = {'generationNum': 0, 'terminateGens': False}
