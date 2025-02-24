@@ -13,14 +13,14 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import os
 from django.conf import settings
-import math
+import math,time
 import copy
 
 # PSO Hyperparameters
-SWARM_SIZE = 20
-MAX_ITERATIONS = 200
-INITIAL_INERTIA = 0.9
-FINAL_INERTIA = 0.4
+SWARM_SIZE = 25
+MAX_ITERATIONS = 300
+INITIAL_INERTIA = 0.7
+FINAL_INERTIA = 0.7
 COGNITIVE_WEIGHT = 1.5
 SOCIAL_WEIGHT = 1.5
 MAX_VELOCITY = 1.0
@@ -158,7 +158,7 @@ class Schedule:
         return self._fitness
 
     def addCourse(self, data, course, courses, dept, section):
-        newClass = Class(dept, section, course)
+        newClass = Class(dept, section.section_id, course)
 
         newClass.set_meetingTime(
             data.get_meetingTimes()[random.randrange(0, len(data.get_meetingTimes()))])
@@ -172,8 +172,8 @@ class Schedule:
         crs_inst = course.instructors.all()
         if not crs_inst:
             raise ValueError(f"No instructors available for {course}.")
-        inst_index = len(self._classes) % len(crs_inst)
-        newClass.set_instructor(crs_inst[inst_index])
+        newClass.set_instructor(
+            crs_inst[random.randrange(0, len(crs_inst))])
 
         self._classes.append(newClass)
 
@@ -377,7 +377,7 @@ class Schedule:
                     self._soft_constraint_violations['no_consecutive_classes'] += 1
 
     def check_noon_classes(self, classes, i, weights):
-        noon_start = self.parse_time('12:00')
+        noon_start = self.parse_time('10:00')
         noon_end = self.parse_time('15:00')
         start_time_str, _ = classes[i].meeting_time.time.split(' - ')
         start_time = self.parse_time(start_time_str)
@@ -405,7 +405,7 @@ class Schedule:
             day_class_count[day] += 1
         max_day = max(day_class_count.values())
         min_day = min(day_class_count.values())
-        if max_day - min_day > 2 :
+        if max_day - min_day > 1 :
             self._soft_constraint_violations['balanced_days'] += 1
 
 
@@ -515,7 +515,7 @@ def get_random_color():
 
 
 
-@login_required
+
 @login_required
 def timetable(request):
     global data
@@ -556,8 +556,14 @@ def timetable(request):
     fitness_values = []
     average_fitness = []
     diversity = []
+    velocity_magnitudes_per_generation = []
+    velocity_diversities = []
+
+    start_time = time.time()
+
 
     while swarm.gbest_fitness < 1.0 and VARS['generationNum'] < MAX_ITERATIONS and not VARS['terminateGens']:
+        velocity_magnitudes = []
         for i, p in enumerate(swarm.particles):  # Ensure the loop variable is correctly defined
             schedule = Schedule()
             schedule._classes = copy.deepcopy(initial_schedule.getClasses())
@@ -583,6 +589,17 @@ def timetable(request):
                 p.velocity[d] = np.clip(p.velocity[d], -MAX_VELOCITY, MAX_VELOCITY)
                 p.position[d] += p.velocity[d]
 
+            velocity_magnitude = np.linalg.norm(p.velocity)
+            velocity_magnitudes.append(velocity_magnitude)
+
+        
+
+        average_velocity_magnitude = np.mean(velocity_magnitudes)
+        velocity_magnitudes_per_generation.append(average_velocity_magnitude)
+
+        velocity_diversity = np.std(velocity_magnitudes)
+        velocity_diversities.append(velocity_diversity)
+
         swarm.update_gbest()
         fitness_values.append(swarm.gbest_fitness)
         current_fitnesses = [particle.pbest_fitness for particle in swarm.particles]
@@ -590,8 +607,18 @@ def timetable(request):
         diversity.append(np.std(current_fitnesses))
         VARS['generationNum'] += 1
 
+    """ generate_velocity_plots( velocity_magnitudes_per_generation,velocity_diversities) """
+
+    end_time = time.time()
+    execution_time = end_time - start_time
+
+    # Print final metrics
+    print(f"Final Best Fitness: {swarm.gbest_fitness}")
+    print(f"Final Average Fitness: {average_fitness[-1]}")
+    print(f"Execution Time: {execution_time:.2f} seconds")
+
     # Generate plots and render timetable template
-    generate_combined_plots(fitness_values, average_fitness, diversity, SWARM_SIZE, INERTIA_WEIGHT)
+    generate_combined_plots(fitness_values, average_fitness, diversity,velocity_magnitudes_per_generation, SWARM_SIZE, INERTIA_WEIGHT)
     best_schedule = Schedule()
     best_schedule._classes = copy.deepcopy(initial_schedule.getClasses())
     best_particle = Particle(classes_data)
@@ -618,7 +645,7 @@ def timetable(request):
         'teacher_colors': teacher_colors,
     })
 
-def generate_combined_plots(fitness_values, average_fitness, diversity, swarm_size, inertia):
+def generate_combined_plots(fitness_values, average_fitness, diversity,velocity_magnitudes_per_generation, swarm_size, inertia):
     plt.figure(figsize=(15, 5))
     
     # Best Fitness Plot
@@ -638,11 +665,18 @@ def generate_combined_plots(fitness_values, average_fitness, diversity, swarm_si
     plt.legend()
 
     # Diversity Plot
-    plt.subplot(1, 3, 3)
+    """ plt.subplot(1, 3, 3)
     plt.plot(diversity, label='Unique Fitness Count', color='green')
     plt.xlabel('Generation')
     plt.ylabel('Unique Fitness Values')
     plt.title('Population Diversity')
+    plt.legend() """
+
+    plt.subplot(1, 3, 3)
+    plt.plot(velocity_magnitudes_per_generation, label='Average Velocity Magnitude', color='red')
+    plt.xlabel('Generation')
+    plt.ylabel('Velocity Magnitude')
+    plt.title('Average Velocity Magnitude per Generation')
     plt.legend()
 
     plt.tight_layout()
@@ -651,8 +685,30 @@ def generate_combined_plots(fitness_values, average_fitness, diversity, swarm_si
     plt.close()
 
 
+""" def generate_velocity_plots(velocity_magnitudes_per_generation, velocity_diversities):
+    plt.figure(figsize=(12, 6))
 
+    # Plot average velocity magnitude
+    plt.subplot(1, 2, 1)
+    plt.plot(velocity_magnitudes_per_generation, label='Average Velocity Magnitude', color='blue')
+    plt.xlabel('Generation')
+    plt.ylabel('Velocity Magnitude')
+    plt.title('Average Velocity Magnitude per Generation')
+    plt.legend()
 
+    # Plot velocity diversity
+    plt.subplot(1, 2, 2)
+    plt.plot(velocity_diversities, label='Velocity Diversity', color='red')
+    plt.xlabel('Generation')
+    plt.ylabel('Velocity Diversity (Std Dev)')
+    plt.title('Velocity Diversity per Generation')
+    plt.legend()
+
+    plt.tight_layout()
+    plot_path = os.path.join(settings.MEDIA_ROOT, 'velocity_plots.png')
+    plt.savefig(plot_path)
+    plt.close()
+ """
 '''
 Page Views
 '''
