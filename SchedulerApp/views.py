@@ -17,8 +17,8 @@ import math,time
 import copy
 
 # PSO Hyperparameters
-SWARM_SIZE = 25
-MAX_ITERATIONS = 300
+SWARM_SIZE = 50
+MAX_ITERATIONS = 500
 INITIAL_INERTIA = 0.7
 FINAL_INERTIA = 0.7
 COGNITIVE_WEIGHT = 1.5
@@ -422,9 +422,9 @@ class Particle:
 
         # Initialize position and velocity
         for data in self.classes_data:
-            mt_pos = random.uniform(0, len(data['mt_options']))
-            instr_pos = random.uniform(0, len(data['instructor_options']))
-            room_pos = random.uniform(0, len(data['room_options']))
+            mt_pos = random.randint(0, len(data['mt_options']) - 1)
+            instr_pos = random.randint(0, len(data['instructor_options']) - 1)
+            room_pos = random.randint(0, len(data['room_options']) - 1)
             self.position.extend([mt_pos, instr_pos, room_pos])
 
             mt_vel = random.uniform(-1, 1)
@@ -463,12 +463,14 @@ class Swarm:
         self.particles = [Particle(classes_data) for _ in range(num_particles)]
         self.gbest_position = None
         self.gbest_fitness = -1
+        self.gbest_particle = None
 
     def update_gbest(self):
         for p in self.particles:
             if p.pbest_fitness > self.gbest_fitness:
                 self.gbest_position = list(p.pbest_position)
                 self.gbest_fitness = p.pbest_fitness
+                self.gbest_particle = p
 
 
 def context_manager(schedule):
@@ -545,8 +547,9 @@ def timetable(request):
         schedule = Schedule()
         schedule._classes = copy.deepcopy(initial_schedule.getClasses())
         print(f"Initializing Particle {i} schedule ID: {id(schedule)}")  # Debug log
-        p.update_schedule(schedule)
-        repair(schedule)
+        p.schedule = schedule
+        p.update_schedule(p.schedule)
+        repair(p.schedule)
         fitness = schedule.getFitness()
         if fitness > best_fitness:
             best_fitness = fitness
@@ -565,12 +568,11 @@ def timetable(request):
     while swarm.gbest_fitness < 1.0 and VARS['generationNum'] < MAX_ITERATIONS and not VARS['terminateGens']:
         velocity_magnitudes = []
         for i, p in enumerate(swarm.particles):  # Ensure the loop variable is correctly defined
-            schedule = Schedule()
-            schedule._classes = copy.deepcopy(initial_schedule.getClasses())
-            print(f"Updating Particle {i} schedule ID: {id(schedule)}")  # Debug log
-            p.update_schedule(schedule)
-            repair(schedule)
-            fitness = schedule.getFitness()
+            
+            print(f"Updating Particle {i} schedule ID: {id(p.schedule)}")  # Debug log
+            p.update_schedule(p.schedule)
+            repair(p.schedule)
+            fitness = p.schedule.getFitness()
 
             # Update personal best
             if fitness > p.pbest_fitness:
@@ -588,6 +590,7 @@ def timetable(request):
                 p.velocity[d] = inertia + cognitive + social
                 p.velocity[d] = np.clip(p.velocity[d], -MAX_VELOCITY, MAX_VELOCITY)
                 p.position[d] += p.velocity[d]
+                
 
             velocity_magnitude = np.linalg.norm(p.velocity)
             velocity_magnitudes.append(velocity_magnitude)
@@ -619,12 +622,15 @@ def timetable(request):
 
     # Generate plots and render timetable template
     generate_combined_plots(fitness_values, average_fitness, diversity,velocity_magnitudes_per_generation, SWARM_SIZE, INERTIA_WEIGHT)
-    best_schedule = Schedule()
-    best_schedule._classes = copy.deepcopy(initial_schedule.getClasses())
-    best_particle = Particle(classes_data)
-    best_particle.position = swarm.gbest_position
-    best_particle.update_schedule(best_schedule)
-    repair(best_schedule)
+
+    best_particle = swarm.gbest_particle  # Directly use the tracked best particle
+
+    if best_particle is None:
+        print("Warning: No best particle found. Falling back to initial schedule.")
+        best_schedule = initial_schedule
+    else:
+        best_schedule = best_particle.schedule
+
 
     # Render timetable template
     break_time_slot = '10:00 - 10:50'
