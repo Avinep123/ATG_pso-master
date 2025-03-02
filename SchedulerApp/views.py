@@ -16,14 +16,17 @@ from django.conf import settings
 import math,time
 import copy
 
+from datetime import datetime, timedelta
+
+
 # PSO Hyperparameters
-SWARM_SIZE = 50
-MAX_ITERATIONS = 500
+SWARM_SIZE = 20
+MAX_ITERATIONS = 200
 INITIAL_INERTIA = 0.7
 FINAL_INERTIA = 0.7
 COGNITIVE_WEIGHT = 1.5
 SOCIAL_WEIGHT = 1.5
-MAX_VELOCITY = 1.0
+MAX_VELOCITY = 3.0
 MIN_PENALTY = 0.1  # Terminate if penalty is below this threshold
 
 VARS = {'generationNum': 0, 'terminateGens': False}
@@ -33,39 +36,57 @@ fitness_values = []
 def sigmoid(x):
     return 1 / (1 + math.exp(-x))
 
-# Repair function to enforce hard constraints
+from datetime import datetime, timedelta
+
+def fix_meeting_time_format(start_time_str, end_time_str):
+    start_time = datetime.strptime(start_time_str.strip(), '%H:%M').time()
+    end_time = datetime.strptime(end_time_str.strip(), '%H:%M').time()
+
+    if end_time < start_time:
+        end_time = (datetime.combine(datetime.today(), end_time) + timedelta(hours=12)).time()
+    
+    return start_time, end_time
+
 def repair(schedule):
     for cls in schedule.getClasses():
-        # Ensure room is assigned
-        if cls.room is None:
-            # Assign a default room if possible
-            rooms = data.get_rooms()
-            if rooms:
-                cls.set_room(random.choice(rooms))
-            else:
-                raise ValueError("No rooms available to assign.")
-
-        # Proceed with capacity check
-        if cls.room.seating_capacity < cls.course.max_numb_students:
-            # Find a larger room
-            larger_rooms = [r for r in data.get_rooms() if r.seating_capacity >= cls.course.max_numb_students]
-            if larger_rooms:
-                cls.set_room(random.choice(larger_rooms))
-
-        # Check instructor availability
         instructor = cls.instructor
         meeting_time = cls.meeting_time
-        start_time_str, end_time_str = meeting_time.time.split(' - ')
-        start_time = datetime.strptime(start_time_str.strip(), '%H:%M').time()
-        end_time = datetime.strptime(end_time_str.strip(), '%H:%M').time()
 
+        # Use fix_meeting_time_format to ensure proper time format
+        start_time_str, end_time_str = meeting_time.time.split(' - ')
+        start_time, end_time = fix_meeting_time_format(start_time_str, end_time_str)
+
+        # If the current meeting time is outside the instructor's availability...
         if start_time < instructor.availability_start or end_time > instructor.availability_end:
-            # Find a new meeting time within the instructor's availability
-            available_times = [ mt for mt in data.get_meetingTimes()
-                                if datetime.strptime(mt.time.split(' - ')[0].strip(), '%H:%M').time() >= instructor.availability_start
-                                and datetime.strptime(mt.time.split(' - ')[1].strip(), '%H:%M').time() <= instructor.availability_end]
-            if available_times:
-                cls.set_meetingTime(random.choice(available_times))
+            # Gather all valid meeting times within the instructor's availability
+            valid_times = []
+            for mt in data.get_meetingTimes():
+                mt_start, mt_end = fix_meeting_time_format(mt.time.split(' - ')[0].strip(), mt.time.split(' - ')[1].strip())
+                if mt_start >= instructor.availability_start and mt_end <= instructor.availability_end:
+                    valid_times.append(mt)
+
+            if not valid_times:
+                print(f"Warning: No valid meeting times available for instructor {instructor.name}. Skipping repair.")
+                continue  # Skip this class if no valid times are available
+
+            # Try to swap with each valid time
+            for candidate in valid_times:
+                conflict_found = False
+                for other_cls in schedule.getClasses():
+                    if other_cls != cls and other_cls.meeting_time == candidate:
+                        other_instructor = other_cls.instructor
+                        other_start_time_str, other_end_time_str = cls.meeting_time.time.split(' - ')
+                        other_start_time, other_end_time = fix_meeting_time_format(other_start_time_str.strip(), other_end_time_str.strip())
+
+                        # Check if swapping makes both meeting times valid for their respective instructors
+                        if other_start_time < other_instructor.availability_start or other_end_time > other_instructor.availability_end:
+                            conflict_found = True
+                        break
+
+                if not conflict_found:
+                    cls.set_meetingTime(candidate)
+                    break  # Move to the next class once the swap is successful
+
 
 class Data:
     def __init__(self):
@@ -160,14 +181,6 @@ class Schedule:
     def addCourse(self, data, course, courses, dept, section):
         newClass = Class(dept, section.section_id, course)
 
-        newClass.set_meetingTime(
-            data.get_meetingTimes()[random.randrange(0, len(data.get_meetingTimes()))])
-
-    # Check if rooms are available
-        rooms = data.get_rooms()
-        if not rooms:
-            raise ValueError("No rooms available in the database.")
-        newClass.set_room(rooms[random.randrange(0, len(rooms))])
 
         crs_inst = course.instructors.all()
         if not crs_inst:
@@ -219,7 +232,7 @@ class Schedule:
 
         print(f"Total classes initialized: {len(self._classes)}")
         return self
-    
+        
     def parse_time(self, time_str):
         """Convert a time string (e.g., '11:30') to a time object."""
         return datetime.strptime(time_str.strip(), '%H:%M').time()
@@ -420,43 +433,40 @@ class Particle:
         self.pbest_fitness = -1
         self.classes_data = classes_data
 
-        # Initialize position and velocity
+        # Initialize position and velocity (only for meeting times)
         for data in self.classes_data:
             mt_pos = random.randint(0, len(data['mt_options']) - 1)
-            instr_pos = random.randint(0, len(data['instructor_options']) - 1)
-            room_pos = random.randint(0, len(data['room_options']) - 1)
-            self.position.extend([mt_pos, instr_pos, room_pos])
-
             mt_vel = random.uniform(-1, 1)
-            instr_vel = random.uniform(-1, 1)
-            room_vel = random.uniform(-1, 1)
-            self.velocity.extend([mt_vel, instr_vel, room_vel])
+            self.position.extend([mt_pos])
+            self.velocity.extend([mt_vel])
 
         self.pbest_position = list(self.position)
+
+        # Print the random initialization
+        print("Random Position Initialization:")
+        print(self.position)
+        for i, cls in enumerate(self.classes_data):
+            print(f"Class {i}: Meeting Time Option Index: {self.position[i]}")
 
     def update_schedule(self, schedule):
         idx = 0
         for i, cls in enumerate(schedule.getClasses()):
             data = self.classes_data[i]
         
-        # Ensure options are not empty
-            if len(data['mt_options']) == 0 or len(data['instructor_options']) == 0 or len(data['room_options']) == 0:
-                print(f"Warning: No options available for class {i}. Skipping update.")
+            # Ensure meeting time options are not empty
+            if len(data['mt_options']) == 0:
+                print(f"Warning: No meeting time options available for class {i}. Skipping update.")
                 continue  # Skip this class if options are empty
 
-        # Update meeting time
+            # Update meeting time
             mt_idx = int(self.position[idx]) % len(data['mt_options'])
             cls.set_meetingTime(data['mt_options'][mt_idx])
         
-        # Update instructor
-            instr_idx = int(self.position[idx + 1]) % len(data['instructor_options'])
-            cls.set_instructor(data['instructor_options'][instr_idx])
-        
-        # Update room
-            room_idx = int(self.position[idx + 2]) % len(data['room_options'])
-            cls.set_room(data['room_options'][room_idx])
-        
-            idx += 3
+            idx += 1
+
+        # Print updated schedule for this particle
+       
+
 
 class Swarm:
     def __init__(self, num_particles, classes_data):
@@ -529,13 +539,14 @@ def timetable(request):
     classes_data = []
     for cls in classes:
         mt_options = list(data.get_meetingTimes())
-        instructor_options = list(cls.course.instructors.all())
-        room_options = list(data.get_rooms())
         classes_data.append({
             'mt_options': mt_options,
-            'instructor_options': instructor_options,
-            'room_options': room_options,
         })
+
+    for i, cls in enumerate(classes):
+        print(f"Class {i}:")
+        print(f"  Meeting Time Options: {[mt.time for mt in classes_data[i]['mt_options']]}")
+        print()
 
     swarm = Swarm(SWARM_SIZE, classes_data)
     VARS['generationNum'] = 0
@@ -544,7 +555,7 @@ def timetable(request):
     # Initialize global best
     best_fitness = -1
     for i, p in enumerate(swarm.particles):
-        schedule = Schedule()
+        schedule = Schedule()  # Create a new Schedule object
         schedule._classes = copy.deepcopy(initial_schedule.getClasses())
         print(f"Initializing Particle {i} schedule ID: {id(schedule)}")  # Debug log
         p.schedule = schedule
