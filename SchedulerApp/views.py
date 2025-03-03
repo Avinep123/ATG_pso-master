@@ -20,14 +20,13 @@ from datetime import datetime, timedelta
 
 
 # PSO Hyperparameters
-SWARM_SIZE = 20
-MAX_ITERATIONS = 200
+SWARM_SIZE = 100
+MAX_ITERATIONS = 100
 INITIAL_INERTIA = 0.7
 FINAL_INERTIA = 0.7
 COGNITIVE_WEIGHT = 1.5
 SOCIAL_WEIGHT = 1.5
-MAX_VELOCITY = 3.0
-MIN_PENALTY = 0.1  # Terminate if penalty is below this threshold
+MAX_VELOCITY = 2.0
 
 VARS = {'generationNum': 0, 'terminateGens': False}
 fitness_values = []
@@ -48,45 +47,45 @@ def fix_meeting_time_format(start_time_str, end_time_str):
     return start_time, end_time
 
 def repair(schedule):
-    for cls in schedule.getClasses():
-        instructor = cls.instructor
-        meeting_time = cls.meeting_time
+    classes = schedule.getClasses()
 
-        # Use fix_meeting_time_format to ensure proper time format
-        start_time_str, end_time_str = meeting_time.time.split(' - ')
-        start_time, end_time = fix_meeting_time_format(start_time_str, end_time_str)
+    # Step 1: Resolve meeting time conflicts
+    for i in range(len(classes)):
+        cls = classes[i]
+        for j in range(i + 1, len(classes)):
+            other_cls = classes[j]
 
-        # If the current meeting time is outside the instructor's availability...
-        if start_time < instructor.availability_start or end_time > instructor.availability_end:
-            # Gather all valid meeting times within the instructor's availability
-            valid_times = []
-            for mt in data.get_meetingTimes():
-                mt_start, mt_end = fix_meeting_time_format(mt.time.split(' - ')[0].strip(), mt.time.split(' - ')[1].strip())
-                if mt_start >= instructor.availability_start and mt_end <= instructor.availability_end:
-                    valid_times.append(mt)
+            # Check if two classes have the same meeting time
+            if cls.meeting_time == other_cls.meeting_time:
+                # Find a new meeting time for one of the classes
+                new_meeting_time = find_non_overlapping_meeting_time(schedule, cls, other_cls)
+                if new_meeting_time:
+                    cls.set_meetingTime(new_meeting_time)
+                    
 
-            if not valid_times:
-                print(f"Warning: No valid meeting times available for instructor {instructor.name}. Skipping repair.")
-                continue  # Skip this class if no valid times are available
 
-            # Try to swap with each valid time
-            for candidate in valid_times:
-                conflict_found = False
-                for other_cls in schedule.getClasses():
-                    if other_cls != cls and other_cls.meeting_time == candidate:
-                        other_instructor = other_cls.instructor
-                        other_start_time_str, other_end_time_str = cls.meeting_time.time.split(' - ')
-                        other_start_time, other_end_time = fix_meeting_time_format(other_start_time_str.strip(), other_end_time_str.strip())
+def find_non_overlapping_meeting_time(schedule, cls, other_cls):
+    """
+    Find a new meeting time for `cls` that does not overlap with `other_cls`.
+    """
+    for mt in data.get_meetingTimes():
+        # We no longer need to check for the instructor's availability
+        
+        # Check if the new meeting time does not conflict with other classes
+        conflict_found = False
+        for existing_cls in schedule.getClasses():
+            if existing_cls != cls and existing_cls.meeting_time == mt:
+                # Only check for conflicts in the same section or department if required
+                if (existing_cls.section == cls.section or
+                    existing_cls.department == cls.department):
+                    conflict_found = True
+                    break
 
-                        # Check if swapping makes both meeting times valid for their respective instructors
-                        if other_start_time < other_instructor.availability_start or other_end_time > other_instructor.availability_end:
-                            conflict_found = True
-                        break
+        if not conflict_found:
+            return mt  # Return the first valid meeting time
 
-                if not conflict_found:
-                    cls.set_meetingTime(candidate)
-                    break  # Move to the next class once the swap is successful
-
+    return None
+ # No valid meeting time found
 
 class Data:
     def __init__(self):
@@ -203,13 +202,7 @@ class Schedule:
         for section in sections:
             dept = section.department
             n = section.num_class_in_week
-            # Ensure we don't exceed available meeting times
-            available_meeting_times = len(data.get_meetingTimes())
-            # print(f"Available meeting times: {available_meeting_times}")
-
-            if n > available_meeting_times:
-                print(f"Reducing n from {n} to available meeting times {available_meeting_times}.")
-                n = available_meeting_times  # Ensure we don't exceed available meeting times
+             # Ensure we don't exceed available meeting times
 
      
 
@@ -266,8 +259,8 @@ class Schedule:
         soft_weights = {
             'no_consecutive_classes': 0.5,
             'noon_classes': 0.5,
-            'break_time_conflict': 0.3,
-            'balanced_days': 0.3,
+            'break_time_conflict': 0.5,
+            'balanced_days': 0.5,
         }
 
     # Check constraints
@@ -288,8 +281,8 @@ class Schedule:
 
         hard_penalty = sum(hard_weights[key] * self._hard_constraint_violations[key] for key in hard_weights)
         soft_penalty = sum(soft_weights[key] * self._soft_constraint_violations[key] for key in soft_weights)
-        hard_penalty /= max(1, len(hard_weights))
-        soft_penalty /= max(1, len(soft_weights))
+        hard_penalty /= max(1, sum(hard_weights.values()))  
+        soft_penalty /= max(1, sum(soft_weights.values()))
         total_penalty = soft_penalty + hard_penalty
         alpha = 0.05
         fitness = math.exp(-alpha * total_penalty)
@@ -390,7 +383,7 @@ class Schedule:
                     self._soft_constraint_violations['no_consecutive_classes'] += 1
 
     def check_noon_classes(self, classes, i, weights):
-        noon_start = self.parse_time('10:00')
+        noon_start = self.parse_time('12:00')
         noon_end = self.parse_time('15:00')
         start_time_str, _ = classes[i].meeting_time.time.split(' - ')
         start_time = self.parse_time(start_time_str)
@@ -418,11 +411,9 @@ class Schedule:
             day_class_count[day] += 1
         max_day = max(day_class_count.values())
         min_day = min(day_class_count.values())
-        if max_day - min_day > 1 :
+        if max_day - min_day > 2 :
             self._soft_constraint_violations['balanced_days'] += 1
-
-
-    
+   
 
 # Particle class representing a candidate solution
 class Particle:
